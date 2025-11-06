@@ -35,18 +35,26 @@ class CustomModelforSequenceClassification(nn.Module):
             # raise NotImplementedError("You need to implement the forward function for the full model")
 
             # pass the input_ids and attention_mask into the model to get the output object (you can name it `output`)
+            output = self.model(input_ids=input_ids, attention_mask=attention_mask)
 
             # get the last hidden state from the output object using `.last_hidden_state`
+            last_hidden_state = output.last_hidden_state
 
             # take the mean of the last hidden state along the sequence length dimension
+            mean_last_hidden_state = torch.mean(last_hidden_state, dim=1)
 
             # pass the mean into the self.classifier to get the logits
+            logits = self.classifier(mean_last_hidden_state)
 
 
         elif self.type == "head":
             # TODO: implement the forward function for the head-tuned model
             # raise NotImplementedError("You need to implement the forward function for the head-tuned model")
             # Hint: it should be the same as the full model
+            output = self.model(input_ids=input_ids, attention_mask=attention_mask)
+            last_hidden_state = output.last_hidden_state
+            mean_last_hidden_state = torch.mean(last_hidden_state, dim=1)
+            logits = self.classifier(mean_last_hidden_state)
 
         
         elif self.type == 'prefix':
@@ -56,32 +64,43 @@ class CustomModelforSequenceClassification(nn.Module):
 
             # the prefix is at self.prefix, but this is only one prefix, we want to append it to each instance in a batch
             # we make multiple copies of self.prefix here. the number of copies = batch size
+            batch_size = input_ids.size(0)
+            prefix_batch = self.prefix.unsqueeze(0).expand(batch_size, -1, -1)
 
             
             # concatentate the input embeddings and our prefix, make sure to put them into our gpu
             # get the input embeddings
             # Hint: you can use self.model.embeddings.word_embeddings to get the input embeddings
-
+            input_embeddings = self.model.embeddings.word_embeddings(input_ids)
+            
             # concatenate the input embeddings and the prefix
             # Hint: check torch.cat for how to concatenate the tensors
+            inputs_embeds = torch.cat([prefix_batch, input_embeddings], dim=1)
 
             # move the input embeddings to the gpu
             # Hint: use .to(device='cuda') to move the tensor to the gpu
             # name the final tensor as `inputs_embeds`
+            inputs_embeds = inputs_embeds.to(input_embeddings.device)
 
             
             # modify attention mask
             # we need to add the prefix to the attention mask
             # the mask on the prefix should be 1, with the dimension of (batch_size, prefix_length)
             # name the final attention mask as `attention_mask`
+            prefix_attention_mask = torch.ones(batch_size, prefix_length, device=attention_mask.device)
+            attention_mask = torch.cat([prefix_attention_mask, attention_mask], dim=1)
 
             
             # pass the input embeddings and the attention mask into the model
             # you can do this by passing a keyword argument "inputs_embeds" to model.forward
+            output = self.model(inputs_embeds=inputs_embeds, attention_mask=attention_mask)
 
 
             # get the last hidden state from the output object, take the mean, and pass it into the classifier
             # Hint: same as the full model and head-tuned model
+            last_hidden_state = output.last_hidden_state
+            mean_last_hidden_state = torch.mean(last_hidden_state, dim=1)
+            logits = self.classifier(mean_last_hidden_state)
 
 
         return {"logits": logits}
@@ -173,10 +192,14 @@ def evaluate_model(model, dataloader, device):
         # Hints:
         # - see the getitem function in the BoolQADataset class for how to access the input_ids and attention_mask
         # - use to() to move the tensors to the device
+        input_ids = batch['input_ids'].to(device)
+        attention_mask = batch['attention_mask'].to(device)
 
 
         # forward pass
         # name the output as `output`
+        with torch.no_grad():
+            output = model(input_ids, attention_mask=attention_mask)
 
         # your code ends here
 
@@ -218,10 +241,12 @@ def train(mymodel, num_epochs, train_dataloader, validation_dataloader, test_dat
         # TODO: implement the optimizer for head-tuned model
         # raise NotImplementedError("You need to implement the optimizer for head-tuned model")
         # you need to get the parameters of the classifier (head), you can do this by calling mymodel.head.parameters()
+        classifier_params = mymodel.classifier.parameters()
 
         # then you need to pass these parameters to the optimizer
         # name the optimizer as `custom_optimizer`
         # Hints: you can refer to how we do this for the optimizer above
+        custom_optimizer = torch.optim.AdamW(classifier_params, lr=lr)
 
         # your code ends here
     
@@ -230,9 +255,11 @@ def train(mymodel, num_epochs, train_dataloader, validation_dataloader, test_dat
         # raise NotImplementedError("You need to implement the optimizer for prefix-tuned model")
         # you need to get the parameters of the prefix, you can do this by calling mymodel.prefix
         # name the parameters as `prefix_params`
+        prefix_params = mymodel.prefix
 
         # you also need to get the parameters of the classifier (head), you can do this by calling mymodel.head.parameters()
         # name the parameters as `classifier_params`
+        classifier_params = mymodel.classifier.parameters()
 
         # your code ends here
         # group the parameters together
@@ -287,18 +314,25 @@ def train(mymodel, num_epochs, train_dataloader, validation_dataloader, test_dat
 
             # get the input_ids, attention_mask, and labels from the batch and put them on the device
             # Hints: similar to the evaluate_model function
+            input_ids = batch['input_ids'].to(device)
+            attention_mask = batch['attention_mask'].to(device)
+            labels = batch['labels'].to(device)
 
 
             # forward pass
             # name the output as `output`
             # Hints: refer to the evaluate_model function on how to get the predictions (logits)
             # - It's slightly different from the implementation in train of base_classification.py
+            output = mymodel(input_ids, attention_mask)
+            predictions = output['logits']
 
 
             # compute the loss using the loss function
+            current_loss = loss(predictions, labels)
 
 
             # loss backward
+            current_loss.backward()
 
             # your code ends here
 
